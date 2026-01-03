@@ -5,10 +5,10 @@
 
 // ASSEGNAZIONI REGISTRI INTERRUPT INTERNO
 volatile int * gpio_0_data = (volatile int*) 0x40000000; // Output (es. LED Tasto 1, 0x1)
-volatile int * IER = (volatile int*) 0x41200008; // INTC Interrupt Enable Register
-volatile int * MER = (volatile int*) 0x4120001C; // INTC Master Enable Register
-volatile int * IISR = (volatile int*) 0x41200000; // INTC Interrupt Status Register (usato per snapshot)
-volatile int * IIAR = (volatile int*) 0x4120000C; // INTC Interrupt Acknowledge Register
+volatile int * IER = (volatile int*) 0x41200008; //  Interrupt Enable Register
+volatile int * MER = (volatile int*) 0x4120001C; // Master Enable Register
+volatile int * IISR = (volatile int*) 0x41200000; // Interrupt Status Register (usato per snapshot)
+volatile int * IIAR = (volatile int*) 0x4120000C; // Interrupt Acknowledge Register
 
 // Registri GPIO Interrupt del tasto esistente (base 0x40060000)
 volatile int * GGIER_1 = (volatile int*) 0x4006011C;
@@ -45,12 +45,12 @@ int main(void)
     *GGIER_2 = 0x80000000; // Abilita GIER per il nuovo GPIO
     *IPIER_2 = 0x1;        // Abilita IPIER, Canale 1 (bit 0)
 
-    // 3) Enable INTC lines (match wiring!)
+    // 3) Enable INTC lines 
     // Abilita entrambi gli interrupt: IRQ0 (esistente) e IRQ1 (nuovo tasto)
     *IER = XPAR_BUTTON_IP2INTC_IRPT_MASK | XPAR_GPIO_IP2INTC_IRPT_MASK;
 
     // Abilita INTC Master Enable e Hardware Interrupt Enable
-    *MER = 0x3; // 0b11 (ME | HIE)
+    *MER = 0x3; // 0b11 
 
     microblaze_enable_interrupts(); // Abilita gli interrupt globali del MicroBlaze
 
@@ -90,3 +90,4 @@ void myISR(void)
 
     }
 }
+
