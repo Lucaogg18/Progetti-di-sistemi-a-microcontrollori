@@ -5,14 +5,11 @@
 #include "xuartlite_l.h"
 #include "xil_io.h"
 
-// -----------------------------------------------------------------------------
-// CONFIGURAZIONE INDIRIZZI HARDWARE
-// -----------------------------------------------------------------------------
+// --- INDIRIZZI HARDWARE ---
+// Qui diciamo al programma dove trovare le periferiche nella memoria della scheda
 #ifndef SDT
     #define TMRCTR_BASEADDR     XPAR_TMRCTR_0_BASEADDR
     #define UART_BASEADDR       XPAR_UARTLITE_0_BASEADDR
-
-    // Sostituisci con indirizzo reale GPIO Motori (es. XPAR_AXI_GPIO_0_BASEADDR)
     #define GPIO_MOTORS_BASE    XPAR_GPIO_MOTORS_BASEADDR
     #define GPIO_LEDS_BASE      0x40000000
 #else
@@ -22,17 +19,15 @@
 
 #define NO_DATA             0xFFFFFFFF
 
-// --- CONFIGURAZIONE TIMER ---
-#define TIMER_PWM           0  // Canale 0 per PWM Veloce
-#define TIMER_BLINK         1  // Canale 1 per Lampeggio Lento
+// --- CONFIGURAZIONE DEI DUE TIMER ---
+#define TIMER_PWM           0  // Timer 0: Controlla la velocità dei motori (veloce)
+#define TIMER_BLINK         1  // Timer 1: Controlla il lampeggio delle frecce (lento)
 
-// Valori di caricamento (Assumendo Clock AXI a 100 MHz)
-// PWM: 400 ticks -> 250 kHz interrupt base -> ~1 kHz PWM resolution
-#define PWM_PERIOD          400
-// BLINK: 50.000.000 ticks -> 0.5 secondi (2 Hz)
-#define BLINK_PERIOD        50000000
+#define PWM_PERIOD          400       // Durata breve per dare potenza fluida ai motori
+#define BLINK_PERIOD        50000000  // Durata lunga (mezzo secondo) per le frecce
 
-// --- MAPPATURA PIN GPIO ---
+// --- PUNTATORI AI PIN (GPIO) ---
+// Variabili speciali che scrivono direttamente sui cavi fisici di LED e Motori
 volatile int * leds_data = (volatile int *)(GPIO_LEDS_BASE + 0x00);
 volatile int * leds_tri  = (volatile int *)(GPIO_LEDS_BASE + 0x04);
 
@@ -41,59 +36,54 @@ volatile int * motors_speed_dir_tri  = (volatile int *)(GPIO_MOTORS_BASE + 0x04)
 volatile int * motors_enable_data    = (volatile int *)(GPIO_MOTORS_BASE + 0x08);
 volatile int * motors_enable_tri     = (volatile int *)(GPIO_MOTORS_BASE + 0x0C);
 
-// Interrupt Controller
+// Registri per gestire le interruzioni (il "campanello" del processore)
 volatile int * IER  = (volatile int *)0x41200008;
 volatile int * MER  = (volatile int *)0x4120001C;
 volatile int * IISR = (volatile int *)0x41200000;
 volatile int * IIAR = (volatile int *)0x4120000C;
 
-// -----------------------------------------------------------------------------
-// VARIABILI GLOBALI
-// -----------------------------------------------------------------------------
-volatile u8 pwm_counter = 0;
-volatile u8 speed_R = 0;
-volatile u8 speed_L = 0;
-volatile u8 dir_R = 0;
-volatile u8 dir_L = 0;
+// --- MEMORIA DI SISTEMA ---
+volatile u8 pwm_counter = 0; // Conta ciclicamente per generare l'onda PWM
+volatile u8 speed_R = 0;     // Velocità destra
+volatile u8 speed_L = 0;     // Velocità sinistra
+volatile u8 dir_R = 0;       // Direzione destra
+volatile u8 dir_L = 0;       // Direzione sinistra
 
-// Variabili Lampeggio
-volatile int blink_state = 0;
-volatile int turn_mode = 0;   // 0=Off, 1=Left, 2=Right
+// Variabili per le frecce
+volatile int blink_state = 0; // Stato della luce (accesa/spenta)
+volatile int turn_mode = 0;   // Dove stiamo girando (0=dritto, 1=SX, 2=DX)
 
-// -----------------------------------------------------------------------------
-// PROTOTIPI
-// -----------------------------------------------------------------------------
+// Elenco delle funzioni usate
 void myISR(void) __attribute__((interrupt_handler));
 int SetupTimer(void);
 u32 UART_RecvByte(UINTPTR BaseAddress);
 void ProcessCommand(char cmd);
-void UpdateTurnSignals(void); // Funzione helper per aggiornare i LED
+void UpdateTurnSignals(void);
 
-// -----------------------------------------------------------------------------
-// MAIN
-// -----------------------------------------------------------------------------
+// --- PROGRAMMA PRINCIPALE ---
 int main(void) {
     int Status;
     u32 uart_input;
 
-    xil_printf("--- Smart Car: Dual Timer System ---\r\n");
-    xil_printf("Comandi: f,b,s,l,r + q,e (Curve Larghe) + z,c (Curve Strette)\r\n");
+    xil_printf("Sistema Avviato. In attesa di comandi...\r\n");
 
-    // 1. Configurazione Output
+    // Configura i pin come USCITA
     *leds_tri = 0x00;
     *motors_speed_dir_tri = 0x00;
     *motors_enable_tri = 0x00;
 
-    // 2. Reset (Tutto Spento)
+    // Spegne tutto all'inizio
     *leds_data = 0x00;
     *motors_speed_dir_data = 0x00;
 
-    // 3. Abilita Driver (Standby = 1)
+    // Accende il chip dei motori
     *motors_enable_data = 0x01;
 
+    // Prepara i timer (motori e frecce)
     Status = SetupTimer();
     if (Status != XST_SUCCESS) return XST_FAILURE;
 
+    // Ciclo infinito: controlla sempre se arrivano comandi dalla tastiera
     while (1) {
         uart_input = UART_RecvByte(UART_BASEADDR);
         if (uart_input != NO_DATA) {
@@ -103,175 +93,159 @@ int main(void) {
     return XST_SUCCESS;
 }
 
-// -----------------------------------------------------------------------------
-// LOGICA COMANDI
-// -----------------------------------------------------------------------------
+// --- GESTIONE DEI COMANDI ---
+// Legge il tasto premuto e imposta velocità e direzione
 void ProcessCommand(char cmd) {
     const u8 SPD_MAX = 150;
     const u8 SPD_MED = 100;
     const u8 SPD_LOW = 50;
 
     switch (cmd) {
-        // --- BASE ---
+        // Movimenti dritti
         case 'f': // Avanti
             dir_R = 1; dir_L = 1; speed_R = SPD_MAX; speed_L = SPD_MAX;
             turn_mode = 0; *leds_data = 0x0;
-            xil_printf("Avanti\r\n");
             break;
 
         case 'b': // Indietro
             dir_R = 0; dir_L = 0; speed_R = SPD_MAX; speed_L = SPD_MAX;
             turn_mode = 0; *leds_data = 0x0;
-            xil_printf("Indietro\r\n");
             break;
 
         case 's': // Stop
             speed_R = 0; speed_L = 0; dir_R = 0; dir_L = 0;
             turn_mode = 0; *leds_data = 0x0;
-            xil_printf("Stop\r\n");
             break;
 
-        // --- PIVOT ---
-        case 'l': // Ruota SX
+        // Rotazioni su se stesso (Pivot)
+        case 'l': // Ruota a Sinistra
             dir_R = 1; dir_L = 0; speed_R = SPD_MAX; speed_L = SPD_MAX;
-            turn_mode = 1; xil_printf("Ruota SX\r\n");
+            turn_mode = 1; // Attiva freccia SX
             break;
 
-        case 'r': // Ruota DX
+        case 'r': // Ruota a Destra
             dir_R = 0; dir_L = 1; speed_R = SPD_MAX; speed_L = SPD_MAX;
-            turn_mode = 2; xil_printf("Ruota DX\r\n");
+            turn_mode = 2; // Attiva freccia DX
             break;
 
-        // --- CURVE AVANZATE ---
-        case 'q': // Wide Left
+        // Curve Larghe (un motore veloce, uno medio)
+        case 'q': 
             dir_R = 1; dir_L = 1; speed_R = SPD_MAX; speed_L = SPD_MED;
-            turn_mode = 1; xil_printf("Curva Larga SX\r\n");
+            turn_mode = 1; 
             break;
 
-        case 'e': // Wide Right
+        case 'e': 
             dir_R = 1; dir_L = 1; speed_R = SPD_MED; speed_L = SPD_MAX;
-            turn_mode = 2; xil_printf("Curva Larga DX\r\n");
+            turn_mode = 2; 
             break;
 
-        case 'z': // Sharp Left
+        // Curve Strette (un motore veloce, uno lento)
+        case 'z': 
             dir_R = 1; dir_L = 1; speed_R = SPD_MAX; speed_L = SPD_LOW;
-            turn_mode = 1; xil_printf("Curva Stretta SX\r\n");
+            turn_mode = 1; 
             break;
 
-        case 'c': // Sharp Right
+        case 'c': 
             dir_R = 1; dir_L = 1; speed_R = SPD_LOW; speed_L = SPD_MAX;
-            turn_mode = 2; xil_printf("Curva Stretta DX\r\n");
+            turn_mode = 2; 
             break;
     }
 }
 
-// -----------------------------------------------------------------------------
-// ISR: DUAL TIMER HANDLER
-// -----------------------------------------------------------------------------
+// --- GESTORE DELLE INTERRUZIONI (IL CUORE DEL SISTEMA) ---
+// Questa funzione viene chiamata automaticamente dall'hardware
 void myISR(void) {
-    // Leggi quale interrupt è scattato dal Controller
-    unsigned p = *IISR;
+    unsigned p = *IISR; // Controlla chi ha suonato il campanello
 
     if (p & XPAR_AXI_TIMER_0_INTERRUPT_MASK) {
 
-        // --------------------------------
-        // GESTIONE TIMER 0: PWM (Veloce)
-        // --------------------------------
-        // Verifica se Timer 0 ha generato interrupt
+        // --- CASO 1: È IL TIMER DEI MOTORI? (Veloce) ---
         u32 csr_pwm = XTmrCtr_GetControlStatusReg(TMRCTR_BASEADDR, TIMER_PWM);
         if (csr_pwm & XTC_CSR_INT_OCCURED_MASK) {
 
-            pwm_counter++;
+            pwm_counter++; // Incrementa il contatore
 
+            // Decide se dare corrente al motore in questo istante
             u32 pwm_bit_R = (pwm_counter < speed_R) ? 1 : 0;
             u32 pwm_bit_L = (pwm_counter < speed_L) ? 1 : 0;
 
+            // Invia il segnale ai motori
             u32 motor_output = (pwm_bit_R << 0) | (dir_R << 1) |
                                (pwm_bit_L << 2) | (dir_L << 3);
-
             *motors_speed_dir_data = motor_output;
 
-            // Pulisci flag interrupt SOLO del Timer PWM
+            // Resetta l'avviso di questo timer
             XTmrCtr_SetControlStatusReg(TMRCTR_BASEADDR, TIMER_PWM, csr_pwm | XTC_CSR_INT_OCCURED_MASK);
         }
 
-        // --------------------------------
-        // GESTIONE TIMER 1: BLINK (Lento)
-        // --------------------------------
-        // Verifica se Timer 1 ha generato interrupt
+        // --- CASO 2: È IL TIMER DELLE FRECCE? (Lento) ---
         u32 csr_blink = XTmrCtr_GetControlStatusReg(TMRCTR_BASEADDR, TIMER_BLINK);
         if (csr_blink & XTC_CSR_INT_OCCURED_MASK) {
 
-            // Qui entriamo ogni 0.5 secondi (non serve divisore software)
+            // Inverte lo stato (se acceso spegne, se spento accende)
             blink_state = !blink_state;
-            UpdateTurnSignals();
+            UpdateTurnSignals(); // Aggiorna i LED
 
-            // Pulisci flag interrupt SOLO del Timer Blink
+            // Resetta l'avviso di questo timer
             XTmrCtr_SetControlStatusReg(TMRCTR_BASEADDR, TIMER_BLINK, csr_blink | XTC_CSR_INT_OCCURED_MASK);
         }
 
-        // ACK al Controller Interrupt Generale
+        // Conferma al processore di aver gestito l'evento
         *IIAR |= XPAR_AXI_TIMER_0_INTERRUPT_MASK;
     }
 }
 
-// Funzione helper per aggiornare i LED frecce
+// Funzione ausiliaria per accendere il LED giusto
 void UpdateTurnSignals(void) {
     if (turn_mode == 1) {
-        // SX: Lampeggia Bit 0
-        *leds_data = (blink_state) ? 0x1 : 0x0;
+        *leds_data = (blink_state) ? 0x1 : 0x0; // Freccia SX
     }
     else if (turn_mode == 2) {
-        // DX: Lampeggia Bit 1
-        *leds_data = (blink_state) ? 0x2 : 0x0;
+        *leds_data = (blink_state) ? 0x2 : 0x0; // Freccia DX
     }
     else {
-        // Spento
-        *leds_data = 0x0;
+        *leds_data = 0x0; // Tutto spento
     }
 }
 
-// -----------------------------------------------------------------------------
-// SETUP TIMER (DUAL CHANNEL)
-// -----------------------------------------------------------------------------
+// --- SETUP INIZIALE DEI TIMER ---
 int SetupTimer(void) {
-    // 1. Setup Interrupt Controller
+    // Abilita il controller delle interruzioni
     *IER = XPAR_AXI_TIMER_0_INTERRUPT_MASK;
     *MER = 0x3;
 
-    // 2. SETUP TIMER 0 (PWM - VELOCE)
-    // ------------------------------------------
-    // Reset e Configurazione Auto-Reload + IRQ + DownCount
+    // Configura TIMER 0 (Motori)
     XTmrCtr_SetControlStatusReg(TMRCTR_BASEADDR, TIMER_PWM, 0);
-    XTmrCtr_SetLoadReg(TMRCTR_BASEADDR, TIMER_PWM, PWM_PERIOD);
+    XTmrCtr_SetLoadReg(TMRCTR_BASEADDR, TIMER_PWM, PWM_PERIOD); // Imposta velocità alta
     XTmrCtr_LoadTimerCounterReg(TMRCTR_BASEADDR, TIMER_PWM);
-
+    // Imposta modalità automatica e conto alla rovescia
     XTmrCtr_SetControlStatusReg(TMRCTR_BASEADDR, TIMER_PWM,
         XTC_CSR_AUTO_RELOAD_MASK | XTC_CSR_ENABLE_INT_MASK | XTC_CSR_DOWN_COUNT_MASK);
 
-    // 3. SETUP TIMER 1 (BLINK - LENTO)
-    // ------------------------------------------
-    // Stessa configurazione, ma con Periodo molto più lungo
+    // Configura TIMER 1 (Frecce)
     XTmrCtr_SetControlStatusReg(TMRCTR_BASEADDR, TIMER_BLINK, 0);
-    XTmrCtr_SetLoadReg(TMRCTR_BASEADDR, TIMER_BLINK, BLINK_PERIOD);
+    XTmrCtr_SetLoadReg(TMRCTR_BASEADDR, TIMER_BLINK, BLINK_PERIOD); // Imposta velocità bassa
     XTmrCtr_LoadTimerCounterReg(TMRCTR_BASEADDR, TIMER_BLINK);
-
+    // Imposta modalità automatica e conto alla rovescia
     XTmrCtr_SetControlStatusReg(TMRCTR_BASEADDR, TIMER_BLINK,
         XTC_CSR_AUTO_RELOAD_MASK | XTC_CSR_ENABLE_INT_MASK | XTC_CSR_DOWN_COUNT_MASK);
 
-    // 4. Avvia entrambi i Timer
+    // Avvia entrambi i timer
     XTmrCtr_Enable(TMRCTR_BASEADDR, TIMER_PWM);
     XTmrCtr_Enable(TMRCTR_BASEADDR, TIMER_BLINK);
 
+    // Dà il via libera al processore
     microblaze_enable_interrupts();
     return XST_SUCCESS;
 }
 
-// --- UART Helper ---
+// --- LETTURA SERIALE ---
 u32 UART_RecvByte(UINTPTR BaseAddress) {
     u32 status = XUartLite_GetStatusReg(BaseAddress);
+    // Se c'è un dato valido nella coda...
     if (status & XUL_SR_RX_FIFO_VALID_DATA) {
         u32 data = XUartLite_ReadReg(BaseAddress, XUL_RX_FIFO_OFFSET);
+        // Ignora i tasti "Invio"
         if ((u8)data == 0x0D || (u8)data == 0x0A) return NO_DATA;
         return data;
     }
