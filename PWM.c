@@ -118,7 +118,7 @@ void myISR(void)
         b_bit = (pwm_counter < duty_B) ? 0 : 1;
 
         // Assembla i bit. Assumiamo la mappatura standard Cmod A7:
-        // Bit 0: Blu, Bit 1: Verde, Bit 2: Rosso (varia in base all'XDC, esempio generico)
+        // Bit 0: Blu, Bit 1: Verde, Bit 2: Rosso 
         rgb_output = (r_bit << 2) | (g_bit << 1) | (b_bit << 0);
 
         // Scrive sul registro GPIO canale 2 (RGB)
@@ -132,4 +132,5 @@ void myISR(void)
         *IIAR |= XPAR_AXI_TIMER_0_INTERRUPT_MASK;
     }
 }
+
 
