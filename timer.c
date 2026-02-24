@@ -15,7 +15,7 @@
 // --- Memory Mapped I/O Pointers ---
 // Puntatori diretti agli indirizzi fisici delle periferiche (GPIO e Interrupt Controller)
 volatile int * gpio_0_data = (volatile int *)0x40000000; // Pointer to GPIO 0 Data register (e.g., LEDs)
-volatile int * gpio_1_data = (volatile int *)0x40010000; // Pointer to GPIO 1 Data register
+
 
 // Interrupt Controller (INTC) Registers
 volatile int * IER = (volatile int*)	0x41200008; // Interrupt Enable Register
@@ -24,14 +24,6 @@ volatile int * MER = (volatile int*)	0x4120001C; // Master Enable Register
 volatile int * IISR = (volatile int*)	0x41200000; // Interrupt Status Register (Read pending interrupts)
 volatile int * IIAR = (volatile int*)	0x4120000C; // Interrupt Acknowledge Register
 
-// Global Interrupt Registers for specific IP blocks (likely GPIOs based on addresses)
-volatile int * GGIER_1 = (volatile int*)	0x4006011C;
-volatile int * GIER_1 = (volatile int*)	0x40060128;
-volatile int * GISR_1 = (volatile int*)	0x40060120;
-
-volatile int * GGIER_2 = (volatile int*)	0x4005011C;
-volatile int * GIER_2 = (volatile int*)	0x40050128;
-volatile int * GISR_2 = (volatile int*)	0x40050120;
 
 // Dichiarazione della funzione ISR con attributo specifico per MicroBlaze
 // Questo dice al compilatore di usare l'istruzione di ritorno da interrupt (rtid) invece di un return normale
@@ -127,4 +119,5 @@ void myISR(void)
         *((int*)0x40000000) = ~(*((int*)0x40000000));
     }
 }
+
 
